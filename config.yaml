@@ -1,0 +1,7 @@
+apiurl: "https://api.authentication.{{landscape}}.hana.ondemand.com"
+access_token_url: "https://{{subaccount}}.authentication.{{landscape}}.hana.ondemand.com/oauth/token"
+clientid: "sb-.."
+clientsecret: ".."
+subaccountid: "from servicekey"
+skip_users:
+  - "service_account@example.com"

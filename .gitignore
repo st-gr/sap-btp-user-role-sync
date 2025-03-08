@@ -1,0 +1,29 @@
+# Python files
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+
+# Virtual environment directories
+Lib/
+Include/
+Scripts/
+env/
+venv/
+.venv/
+
+# pip cache and log files
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PowerShell files
+*.ps1xml
+*.psd1
+*.psm1
+*.log
+
+# Editors and OS generated files
+.idea/
+.vscode/
+*.swp
+*~
