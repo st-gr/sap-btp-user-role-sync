@@ -4,11 +4,14 @@
 
 .DESCRIPTION
     This script loads configuration from a YAML file (config.yaml), obtains an OAuth token using client credentials,
-    and then synchronizes users and roles between the “sap.default” and “sap.custom” origins.
+    and then synchronizes users and roles between the 'sap.default' and 'sap.custom' origins.
     Optionally you can synchronize a single user (with --user) or copy role assignments from one user to another 
     (with --copy-source and --copy-dest).
     If the client credentials (clientid and clientsecret) are not present in the YAML configuration file, the script 
     attempts to retrieve them from the environment variables SAP_BTP_CLIENTID and SAP_BTP_CLIENTSECRET respectively.
+
+.PARAMETER config
+    Path to the configuration file in YAML format. Default is "config.yaml".
 .PARAMETER user
     Email address of a user to synchronize exclusively.
 
@@ -34,7 +37,10 @@ Param (
     [string]$copy_source,
 
     [Parameter(Mandatory=$false)]
-    [string]$copy_dest
+    [string]$copy_dest,
+
+    [Parameter(Mandatory=$false)]
+    [string]$config = "config.yaml"
 )
 
 #----------------------------------------
@@ -125,7 +131,6 @@ function Get-OAuthToken {
         $body = "grant_type=client_credentials"
         $response = Invoke-RestMethod -Uri $Global:Config.access_token_url -Method Post -Headers $headers -Body $body
         $Global:AccessToken = $response.access_token
-        Write-Log "INFO" "Token obtained: $Global:AccessToken"
         Write-Log "INFO" "Successfully obtained OAuth token"
     }
     catch {
@@ -231,11 +236,12 @@ function Assign-RoleToUser {
         [Parameter(Mandatory=$true)]
         [string]$UserId,
         [Parameter(Mandatory=$true)]
-        [string]$UserEmail
+        [string]$UserEmail,
+        [string]$UserOrigin
     )
     try {
         $memberData = @{
-            origin = "sap.custom"
+            origin = $UserOrigin
             type   = "USER"
             value  = $UserId
         }
@@ -244,10 +250,10 @@ function Assign-RoleToUser {
         $url = "$($Global:Config.apiurl)/Groups/$RoleId/members"
         $jsonBody = $memberData | ConvertTo-Json -Depth 5
         Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body $jsonBody | Out-Null
-        Write-Log "INFO" "Assigned role $RoleId to user $UserEmail ($UserId)"
+        Write-Log "INFO" "Assigned role '$RoleId' to user $UserEmail ($($memberData.origin))"
     }
     catch {
-        Write-Log "ERROR" "Failed to assign role $RoleId to user $UserEmail ($UserId): $_"
+        Write-Log "ERROR" "Failed to assign role '$RoleId' to user $UserEmail ($($memberData.origin)): $_"
     }
 }
 
@@ -260,16 +266,23 @@ function Remove-RoleFromUser {
         [Parameter(Mandatory=$true)]
         [string]$UserId,
         [Parameter(Mandatory=$true)]
-        [string]$UserEmail
+        [string]$UserEmail,
+        [string]$UserOrigin
     )
     try {
         $url = "$($Global:Config.apiurl)/Groups/$RoleId/members/$UserId"
         $headers = Get-Headers
         Invoke-RestMethod -Uri $url -Method Delete -Headers $headers | Out-Null
-        Write-Log "INFO" "Removed role $RoleId from user $UserEmail ($UserId)"
+        # Get origin from the group membership API response if available, otherwise default to sap.custom
+        #$origin = "sap.custom"
+        #try { $origin = (Invoke-RestMethod -Uri "$($Global:Config.apiurl)/Groups/$RoleId" -Method Get -Headers $headers).members.Where({$_.value -eq $UserId}, 'First')[0].origin } catch {}
+        Write-Log "INFO" "Removed role '$RoleId' from user $UserEmail ($UserOrigin)"
     }
     catch {
-        Write-Log "ERROR" "Failed to remove role $RoleId from user $UserEmail ($UserId): $_"
+        # For error message, use the UserOrigin parameter or try to determine it
+        $origin = "sap.custom"
+        try { $origin = (Invoke-RestMethod -Uri "$($Global:Config.apiurl)/Groups/$RoleId" -Method Get -Headers $headers).members.Where({$_.value -eq $UserId}, 'First')[0].origin } catch {}
+        Write-Log "ERROR" "Failed to remove role '$RoleId' from user $UserEmail ($origin): $_"
     }
 }
 
@@ -385,12 +398,12 @@ function Sync-UsersAndRoles {
 
                 foreach ($role in $defaultRoles.Keys) {
                     if (-not $customRoles.ContainsKey($role) -and $Global:RoleCollections.ContainsKey($role)) {
-                        Assign-RoleToUser -RoleId $role -UserId $customUser.id -UserEmail $email
+                        Assign-RoleToUser -RoleId $role -UserId $customUser.id -UserEmail $email -UserOrigin "sap.custom"
                     }
                 }
                 foreach ($role in $customRoles.Keys) {
                     if (-not $defaultRoles.ContainsKey($role) -and $Global:RoleCollections.ContainsKey($role)) {
-                        Remove-RoleFromUser -RoleId $role -UserId $customUser.id -UserEmail $email
+                        Remove-RoleFromUser -RoleId $role -UserId $customUser.id -UserEmail $email -UserOrigin "sap.custom"
                     }
                 }
             }
@@ -409,7 +422,8 @@ function Copy-RoleAssignments {
         [Parameter(Mandatory=$true)]
         [string]$SourceEmail,
         [Parameter(Mandatory=$true)]
-        [string]$DestEmail
+        [string]$DestEmail,
+        [string]$UserOrigin
     )
     try {
         $SourceEmail = $SourceEmail.Trim().ToLower()
@@ -443,14 +457,14 @@ function Copy-RoleAssignments {
         foreach ($role in $sourceRolesDefault.Keys) {
             if (-not $destRolesDefault.ContainsKey($role)) {
                 if ($Global:RoleCollections.ContainsKey($role)) {
-                    Assign-RoleToUser -RoleId $role -UserId $destDefault.id -UserEmail $DestEmail
+                    Assign-RoleToUser -RoleId $role -UserId $destDefault.id -UserEmail $DestEmail -UserOrigin "sap.default"
                 }
             }
         }
         foreach ($role in $destRolesDefault.Keys) {
             if (-not $sourceRolesDefault.ContainsKey($role)) {
                 if ($Global:RoleCollections.ContainsKey($role)) {
-                    Remove-RoleFromUser -RoleId $role -UserId $destDefault.id -UserEmail $DestEmail
+                    Remove-RoleFromUser -RoleId $role -UserId $destDefault.id -UserEmail $DestEmail -UserOrigin "sap.default"
                 }
             }
         }
@@ -478,14 +492,14 @@ function Copy-RoleAssignments {
         foreach ($role in $sourceRolesCustom.Keys) {
             if (-not $destRolesCustom.ContainsKey($role)) {
                 if ($Global:RoleCollections.ContainsKey($role)) {
-                    Assign-RoleToUser -RoleId $role -UserId $destCustom.id -UserEmail $DestEmail
+                    Assign-RoleToUser -RoleId $role -UserId $destCustom.id -UserEmail $DestEmail -UserOrigin "sap.custom"
                 }
             }
         }
         foreach ($role in $destRolesCustom.Keys) {
             if (-not $sourceRolesCustom.ContainsKey($role)) {
                 if ($Global:RoleCollections.ContainsKey($role)) {
-                    Remove-RoleFromUser -RoleId $role -UserId $destCustom.id -UserEmail $DestEmail
+                    Remove-RoleFromUser -RoleId $role -UserId $destCustom.id -UserEmail $DestEmail -UserOrigin "sap.custom"
                 }
             }
         }
@@ -498,8 +512,8 @@ function Copy-RoleAssignments {
 #----------------------------------------
 # Main execution
 try {
-    # Load configuration from config.yaml
-    $Global:Config = Import-Yaml -Path "config.yaml"
+    # Load configuration from the provided config file path
+    $Global:Config = Import-Yaml -Path $config
     # Obtain OAuth token
     Get-OAuthToken
 

@@ -27,3 +27,7 @@ pip-delete-this-directory.txt
 .vscode/
 *.swp
 *~
+
+# files with sensitive information
+config.yaml
+CLAUDE.md
